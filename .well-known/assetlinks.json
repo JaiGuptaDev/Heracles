@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "dev.workers.jaigupta_main.heracles.twa",
+        "sha256_cert_fingerprints": ["22:A2:F8:39:61:B3:DD:97:D5:1B:F7:D9:2F:5B:EA:15:E4:4D:B1:A4:38:E8:8B:A3:C1:8A:BD:1C:5E:5A:19:35"]
+      }
+    }]
