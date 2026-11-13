@@ -1,0 +1,40 @@
+{
+  "background_color": "#0F1113",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "Heracles",
+  "orientation": "portrait",
+  "scope": "/",
+  "short_name": "Heracles",
+  "start_url": "https://heracles.jaigupta-main.workers.dev/",
+  "theme_color": "#0F1113",
+  "id": "https://heracles.jaigupta-main.workers.dev/",
+  "description": "A gym tracker with built in visualisations and data back up features.",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
