@@ -542,6 +542,7 @@ function save(){
       .then(async()=>{
         const database=await openDB();
         await idbPut(database,STATE_KEY,snapshot);
+        publishToHub(snapshot);
       })
       .catch(error=>{
         console.error('Heracles save failed:',error);
@@ -549,6 +550,106 @@ function save(){
       });
   },120);
 }
+
+
+/* ---------- optional local Personal Data Hub bridge ---------- */
+/*
+  Chrome's TWA postMessage channel delivers its transferred MessagePort in
+  the first window message event. Android then uses the channel to exchange
+  string messages. Data stays on-device; this bridge does not upload data.
+*/
+const HUB_SOURCE = {
+  app_id: 'heracles',
+  package_name: 'dev.workers.jaigupta_main.heracles.twa',
+  app_version: '1.0.0',
+  schema_version: 1
+};
+let hubPort = null;
+let hubRevision = Date.now();
+let hubSendQueue = Promise.resolve();
+let hubLastPayload = '';
+
+function makeHubEnvelope(snapshot) {
+  hubRevision = Math.max(Date.now(), hubRevision + 1);
+  const now = new Date().toISOString();
+  return {
+    protocol: 'personal-data-hub',
+    protocol_version: 1,
+    source: {
+      ...HUB_SOURCE,
+      revision: hubRevision,
+      exported_at: now
+    },
+    records: [{
+      record_id: 'heracles_state_main',
+      record_type: 'heracles_state',
+      created_at: now,
+      updated_at: now,
+      occurred_at: now,
+      deleted: false,
+      data: snapshot
+    }]
+  };
+}
+
+function publishToHub(snapshot) {
+  if (!hubPort) return;
+  const envelope = makeHubEnvelope(snapshot);
+  const json = JSON.stringify(envelope);
+  // The Hub starter project currently accepts at most 200,000 JSON characters.
+  if (json.length > 200000) {
+    console.warn('HERACLES Hub sync skipped: snapshot exceeds the current message limit.');
+    toast('Hub sync skipped — backup is too large');
+    return;
+  }
+  if (json === hubLastPayload) return;
+  hubLastPayload = json;
+  hubSendQueue = hubSendQueue.then(() => {
+    // Android Custom Tabs onPostMessage receives a string; send the envelope
+    // itself so the native Hub can validate and import it directly.
+    if (hubPort) hubPort.postMessage(json);
+  }).catch(error => {
+    console.error('HERACLES Hub sync failed:', error);
+    toast('Hub connection error');
+  });
+}
+
+function connectHubPort(port) {
+  if (hubPort) {
+    try { hubPort.close(); } catch (_) {}
+  }
+  hubPort = port;
+  hubPort.onmessage = event => {
+    let msg = event.data;
+    if (typeof msg === 'string') {
+      try { msg = JSON.parse(msg); } catch (_) { msg = { message: msg }; }
+    }
+    msg = msg || {};
+    if (msg.type === 'personal-data-hub-ack' || msg.accepted === true) {
+      console.info('HERACLES data received by local Hub.', msg);
+    } else if (msg.type === 'personal-data-hub-error' || msg.error || msg.accepted === false) {
+      console.error('Local Hub rejected HERACLES data:', msg.error || msg.message || msg);
+      toast('Hub sync failed');
+    }
+  };
+  if (hubPort.start) hubPort.start();
+  publishToHub(S);
+}
+
+window.addEventListener('message', event => {
+  // The browser transfers the channel port in this event. The Android
+  // handshake is a separate message and does not itself carry the port.
+  if (event.ports && event.ports[0]) {
+    connectHubPort(event.ports[0]);
+  }
+});
+
+window.addEventListener('pagehide', () => {
+  if (hubPort) {
+    try { hubPort.close(); } catch (_) {}
+    hubPort = null;
+  }
+});
 
 /* ---------- helpers ---------- */
 const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -1448,6 +1549,7 @@ fileInput.onchange=(e)=>{
       const database=await openDB();
       await idbPut(database,STATE_KEY,imported);
       S=imported;
+      publishToHub(S);
       renderHead();
       renderTrain();
       toast('Restored');
@@ -1466,6 +1568,7 @@ async function boot(){
     buildNav();
     renderHead();
     renderTrain();
+    publishToHub(S);
     document.getElementById('swface').innerHTML=fmt(0);
   }catch(error){
     console.error('Heracles startup failed:',error);
