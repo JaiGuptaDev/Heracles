@@ -438,24 +438,117 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 <div class="toast" id="toast"></div>
 
 <script>
-/* ---------- storage ---------- */
+/* ---------- storage: IndexedDB ---------- */
+const DB_NAME='HeraclesDB';
+const DB_VERSION=1;
+const STORE_NAME='app_state';
+const STATE_KEY='main';
 const KEY='heracles_gym.v1';
 const LEGACY_KEY='gym_trackify_9000.v1';
 const DEFAULTS={routine:{0:[],1:[],2:[],3:[],4:[],5:[],6:[]},logs:{}};
-let S=load();
-function load(){
+let S=structuredClone(DEFAULTS);
+let dbPromise;
+let saveT;
+let saveQueue=Promise.resolve();
+
+function normalizeState(p){
+  return {
+    ...structuredClone(DEFAULTS),
+    ...(p && typeof p==='object' ? p : {}),
+    routine:{...DEFAULTS.routine,...(p && p.routine ? p.routine : {})},
+    logs:(p && p.logs && typeof p.logs==='object') ? p.logs : {}
+  };
+}
+
+function openDB(){
+  if(dbPromise) return dbPromise;
+  dbPromise=new Promise((resolve,reject)=>{
+    if(!('indexedDB' in window)){
+      reject(new Error('IndexedDB is not supported in this browser.'));
+      return;
+    }
+    const request=indexedDB.open(DB_NAME,DB_VERSION);
+    request.onupgradeneeded=()=>{
+      const database=request.result;
+      if(!database.objectStoreNames.contains(STORE_NAME)){
+        database.createObjectStore(STORE_NAME,{keyPath:'id'});
+      }
+    };
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>reject(request.error || new Error('Could not open database.'));
+    request.onblocked=()=>reject(new Error('Database upgrade is blocked by another open tab.'));
+  });
+  return dbPromise;
+}
+
+function idbGet(database,id){
+  return new Promise((resolve,reject)=>{
+    const tx=database.transaction(STORE_NAME,'readonly');
+    const request=tx.objectStore(STORE_NAME).get(id);
+    request.onsuccess=()=>resolve(request.result ? request.result.value : undefined);
+    request.onerror=()=>reject(request.error || new Error('Could not read saved data.'));
+  });
+}
+
+function idbPut(database,id,value){
+  return new Promise((resolve,reject)=>{
+    const tx=database.transaction(STORE_NAME,'readwrite');
+    tx.objectStore(STORE_NAME).put({id,value});
+    tx.oncomplete=()=>resolve();
+    tx.onerror=()=>reject(tx.error || new Error('Could not save data.'));
+    tx.onabort=()=>reject(tx.error || new Error('Save was cancelled.'));
+  });
+}
+
+async function load(){
+  const database=await openDB();
+  const stored=await idbGet(database,STATE_KEY);
+  if(stored!==undefined) return normalizeState(stored);
+
+  // One-time migration: copy existing localStorage data into IndexedDB first.
+  // Only remove the old copy after the IndexedDB transaction has committed.
+  let legacyRaw=null;
   try{
-    const r=localStorage.getItem(KEY) || localStorage.getItem(LEGACY_KEY);
-    if(r){
-      const p=JSON.parse(r);
-      return{...structuredClone(DEFAULTS),...p,routine:{...DEFAULTS.routine,...(p.routine||{})}};
+    legacyRaw=localStorage.getItem(KEY) || localStorage.getItem(LEGACY_KEY);
+  }catch(error){
+    console.warn('Could not read legacy localStorage data:',error);
+  }
+
+  if(legacyRaw){
+    try{
+      const migrated=normalizeState(JSON.parse(legacyRaw));
+      await idbPut(database,STATE_KEY,migrated);
+      try{
+        localStorage.removeItem(KEY);
+        localStorage.removeItem(LEGACY_KEY);
+      }catch(error){
+        console.warn('Data migrated, but legacy localStorage cleanup failed:',error);
+      }
+      toast('Existing data migrated');
+      return migrated;
+    }catch(error){
+      console.error('Heracles migration failed:',error);
+      throw new Error('Your existing data could not be migrated. The original localStorage copy has been kept.');
     }
   }
-  catch(e){}
   return structuredClone(DEFAULTS);
 }
-let saveT;
-function save(){clearTimeout(saveT);saveT=setTimeout(()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast('Storage error')}},120);}
+
+function save(){
+  clearTimeout(saveT);
+  saveT=setTimeout(()=>{
+    const snapshot=structuredClone(S);
+    saveQueue=saveQueue
+      .then(async()=>{
+        const database=await openDB();
+        await idbPut(database,STATE_KEY,snapshot);
+      })
+      .catch(error=>{
+        console.error('Heracles save failed:',error);
+        toast('Storage error — changes may not be saved');
+      });
+  },120);
+}
 
 /* ---------- helpers ---------- */
 const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -1346,22 +1439,41 @@ fileInput.onchange=(e)=>{
   const file = e.target.files[0];
   if(!file) return;
   const reader = new FileReader();
-  reader.onload = (event)=>{
+  reader.onload = async(event)=>{
     try {
+      clearTimeout(saveT);
+      await saveQueue;
       const p = JSON.parse(event.target.result);
-      S = {...structuredClone(DEFAULTS), ...p};
-      save();
+      const imported=normalizeState(p);
+      const database=await openDB();
+      await idbPut(database,STATE_KEY,imported);
+      S=imported;
+      renderHead();
       renderTrain();
       toast('Restored');
     } catch(err) {
-      toast('Invalid file');
+      console.error('Heracles import failed:',err);
+      toast('Invalid file or storage error');
     }
   };
   reader.readAsText(file);
 };
 
 /* ---------- boot ---------- */
-buildNav();renderHead();renderTrain();document.getElementById('swface').innerHTML=fmt(0);
+async function boot(){
+  try{
+    S=await load();
+    buildNav();
+    renderHead();
+    renderTrain();
+    document.getElementById('swface').innerHTML=fmt(0);
+  }catch(error){
+    console.error('Heracles startup failed:',error);
+    toast('Could not open local database');
+    document.getElementById('swface').innerHTML=fmt(0);
+  }
+}
+boot();
 </script>
 </body>
 </html>
